@@ -9,7 +9,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # Основная функция, которая запускает бота
 if __name__ == '__main__':
     # Создаём объект ApplicationBuilder с указанием токена бота
-    application = ApplicationBuilder().token('5720251842:AAFW1KxNlpQzHE4GStaiM5OynsObj3abvZI').build()
+    application = ApplicationBuilder().token('xxx').build()
 
     # Добавляем обработчик команды /start
     application.add_handler(CommandHandler('start', start))
