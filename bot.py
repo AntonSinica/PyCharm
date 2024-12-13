@@ -1,10 +1,14 @@
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, ConversationHandler, MessageHandler, filters
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes,
+    ConversationHandler, MessageHandler, filters
+)
 import mysql.connector
 from datetime import datetime
 
 # Состояния для диалога
-DESCRIPTION, DEADLINE = range(2)
+DESCRIPTION, DEADLINE = range(2)  # Добавлено определение DESCRIPTION и DEADLINE
+SELECT_TASK, CHOOSE_UPDATE_OPTION, UPDATE_DESCRIPTION, UPDATE_DEADLINE = range(2, 6)
 
 # Функция для подключения к базе данных
 def connect_to_db():
@@ -19,8 +23,11 @@ def connect_to_db():
 def register_user(user_id, username, first_name, last_name):
     db = connect_to_db()
     cursor = db.cursor()
-    cursor.execute("INSERT INTO users (user_id, username, first_name, last_name) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE username=%s, first_name=%s, last_name=%s",
-                   (user_id, username, first_name, last_name, username, first_name, last_name))
+    cursor.execute(
+        "INSERT INTO users (user_id, username, first_name, last_name) VALUES (%s, %s, %s, %s) "
+        "ON DUPLICATE KEY UPDATE username=%s, first_name=%s, last_name=%s",
+        (user_id, username, first_name, last_name, username, first_name, last_name)
+    )
     db.commit()
     cursor.close()
     db.close()
@@ -55,8 +62,10 @@ async def get_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     # Сохранение задачи в базе данных
     db = connect_to_db()
     cursor = db.cursor()
-    cursor.execute("INSERT INTO tasks (user_id, description, deadline) VALUES (%s, %s, %s)",
-                   (user_id, context.user_data['description'], deadline))
+    cursor.execute(
+        "INSERT INTO tasks (user_id, description, deadline) VALUES (%s, %s, %s)",
+        (user_id, context.user_data['description'], deadline)
+    )
     db.commit()
     cursor.close()
     db.close()
@@ -94,10 +103,7 @@ async def view_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             response += f"ID: {task_id}, Описание: {description}, Срок: {deadline}\n"
         await update.message.reply_text(response)
 
-# Состояния для диалога
-SELECT_TASK, UPDATE_DESCRIPTION, UPDATE_DEADLINE = range(3)
-
-# Функция для выбора задачи
+# Функция для начала диалога обновления задачи
 async def update_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.message.from_user.id
 
@@ -124,7 +130,7 @@ async def update_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await update.message.reply_text(response)
     return SELECT_TASK
 
-# Функция для выбора поля для редактирования
+# Функция для выбора задачи
 async def select_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     task_id = update.message.text
 
@@ -142,21 +148,21 @@ async def select_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     context.user_data['task_id'] = task_id
     await update.message.reply_text("Что вы хотите изменить?\n1. Описание\n2. Срок выполнения\nВведите номер:")
-    return UPDATE_DESCRIPTION
+    return CHOOSE_UPDATE_OPTION
 
 # Функция для выбора поля для редактирования
-async def update_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def choose_update_option(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     option = update.message.text
 
     if option == "1":
         await update.message.reply_text("Введите новое описание задачи:")
-        return UPDATE_DESCRIPTION  # Возвращаем состояние для ввода описания
+        return UPDATE_DESCRIPTION
     elif option == "2":
         await update.message.reply_text("Введите новый срок выполнения задачи (в формате ГГГГ-ММ-ДД ЧЧ:ММ):")
-        return UPDATE_DEADLINE  # Возвращаем состояние для ввода срока
+        return UPDATE_DEADLINE
     else:
         await update.message.reply_text("Неверный ввод. Попробуйте снова.")
-        return UPDATE_DESCRIPTION  # Повторно запрашиваем выбор
+        return CHOOSE_UPDATE_OPTION
 
 # Функция для сохранения нового описания
 async def save_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -192,10 +198,10 @@ async def save_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     cursor.close()
     db.close()
 
-    await update.message.reply_text("Срок выполнения задачи успешно обновлён!")
+    await update.message.reply_text("Срок выполнения задачи успешно обновлен!")
     return ConversationHandler.END
 
-# Функция для отмены диалога
+# Функция для отмены диалога обновления
 async def cancel_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Редактирование задачи отменено.")
     return ConversationHandler.END
@@ -219,9 +225,9 @@ if __name__ == '__main__':
         entry_points=[CommandHandler('updatetask', update_task)],
         states={
             SELECT_TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_task)],
+            CHOOSE_UPDATE_OPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_update_option)],
             UPDATE_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_description)],
-            # Обрабатываем ввод описания
-            UPDATE_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_deadline)]  # Обрабатываем ввод срока
+            UPDATE_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_deadline)]
         },
         fallbacks=[CommandHandler('cancel', cancel_update)]
     )
