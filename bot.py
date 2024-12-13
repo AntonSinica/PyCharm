@@ -11,7 +11,7 @@ def connect_to_db():
     return mysql.connector.connect(
         host="localhost",
         user="root",
-        password="your_password",  # Замените на ваш пароль
+        password="qqq",  # Замените на ваш пароль
         database="task_manager"
     )
 
@@ -69,9 +69,140 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Добавление задачи отменено.")
     return ConversationHandler.END
 
+# Функция для просмотра задач
+async def view_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.message.from_user.id
+
+    # Подключение к базе данных
+    db = connect_to_db()
+    cursor = db.cursor()
+
+    # Получение задач пользователя
+    cursor.execute("SELECT task_id, description, deadline FROM tasks WHERE user_id = %s", (user_id,))
+    tasks = cursor.fetchall()
+
+    # Закрытие соединения
+    cursor.close()
+    db.close()
+
+    if not tasks:
+        await update.message.reply_text("У вас нет задач.")
+    else:
+        response = "Ваши задачи:\n"
+        for task in tasks:
+            task_id, description, deadline = task
+            response += f"ID: {task_id}, Описание: {description}, Срок: {deadline}\n"
+        await update.message.reply_text(response)
+
+# Состояния для диалога
+SELECT_TASK, UPDATE_DESCRIPTION, UPDATE_DEADLINE = range(3)
+
+# Функция для выбора задачи
+async def update_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.message.from_user.id
+
+    # Подключение к базе данных
+    db = connect_to_db()
+    cursor = db.cursor()
+
+    # Получение задач пользователя
+    cursor.execute("SELECT task_id, description, deadline FROM tasks WHERE user_id = %s", (user_id,))
+    tasks = cursor.fetchall()
+
+    # Закрытие соединения
+    cursor.close()
+    db.close()
+
+    if not tasks:
+        await update.message.reply_text("У вас нет задач.")
+        return ConversationHandler.END
+
+    response = "Выберите задачу для редактирования (введите ID задачи):\n"
+    for task in tasks:
+        task_id, description, deadline = task
+        response += f"ID: {task_id}, Описание: {description}, Срок: {deadline}\n"
+    await update.message.reply_text(response)
+    return SELECT_TASK
+
+# Функция для выбора поля для редактирования
+async def select_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    task_id = update.message.text
+
+    # Проверка, существует ли задача
+    db = connect_to_db()
+    cursor = db.cursor()
+    cursor.execute("SELECT * FROM tasks WHERE task_id = %s", (task_id,))
+    task = cursor.fetchone()
+    cursor.close()
+    db.close()
+
+    if not task:
+        await update.message.reply_text("Задача с таким ID не найдена. Попробуйте снова.")
+        return SELECT_TASK
+
+    context.user_data['task_id'] = task_id
+    await update.message.reply_text("Что вы хотите изменить?\n1. Описание\n2. Срок выполнения\nВведите номер:")
+    return UPDATE_DESCRIPTION
+
+# Функция для выбора поля для редактирования
+async def update_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    option = update.message.text
+
+    if option == "1":
+        await update.message.reply_text("Введите новое описание задачи:")
+        return UPDATE_DESCRIPTION  # Возвращаем состояние для ввода описания
+    elif option == "2":
+        await update.message.reply_text("Введите новый срок выполнения задачи (в формате ГГГГ-ММ-ДД ЧЧ:ММ):")
+        return UPDATE_DEADLINE  # Возвращаем состояние для ввода срока
+    else:
+        await update.message.reply_text("Неверный ввод. Попробуйте снова.")
+        return UPDATE_DESCRIPTION  # Повторно запрашиваем выбор
+
+# Функция для сохранения нового описания
+async def save_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    new_description = update.message.text
+    task_id = context.user_data['task_id']
+
+    # Обновление описания в базе данных
+    db = connect_to_db()
+    cursor = db.cursor()
+    cursor.execute("UPDATE tasks SET description = %s WHERE task_id = %s", (new_description, task_id))
+    db.commit()
+    cursor.close()
+    db.close()
+
+    await update.message.reply_text("Описание задачи успешно обновлено!")
+    return ConversationHandler.END
+
+# Функция для сохранения нового срока выполнения
+async def save_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        new_deadline = datetime.strptime(update.message.text, '%Y-%m-%d %H:%M')
+    except ValueError:
+        await update.message.reply_text("Неверный формат даты. Попробуйте снова (ГГГГ-ММ-ДД ЧЧ:ММ):")
+        return UPDATE_DEADLINE
+
+    task_id = context.user_data['task_id']
+
+    # Обновление срока выполнения в базе данных
+    db = connect_to_db()
+    cursor = db.cursor()
+    cursor.execute("UPDATE tasks SET deadline = %s WHERE task_id = %s", (new_deadline, task_id))
+    db.commit()
+    cursor.close()
+    db.close()
+
+    await update.message.reply_text("Срок выполнения задачи успешно обновлён!")
+    return ConversationHandler.END
+
+# Функция для отмены диалога
+async def cancel_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Редактирование задачи отменено.")
+    return ConversationHandler.END
+
 # Основная функция
 if __name__ == '__main__':
-    application = ApplicationBuilder().token('YOUR_BOT_TOKEN').build()
+    application = ApplicationBuilder().token('xxx').build()
 
     # Обработчик диалога для добавления задачи
     conv_handler = ConversationHandler(
@@ -83,5 +214,19 @@ if __name__ == '__main__':
         fallbacks=[CommandHandler('cancel', cancel)]
     )
 
+    # Обработчик диалога для редактирования задачи
+    update_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('updatetask', update_task)],
+        states={
+            SELECT_TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_task)],
+            UPDATE_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_description)],
+            # Обрабатываем ввод описания
+            UPDATE_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_deadline)]  # Обрабатываем ввод срока
+        },
+        fallbacks=[CommandHandler('cancel', cancel_update)]
+    )
+
     application.add_handler(conv_handler)
+    application.add_handler(CommandHandler('viewtasks', view_tasks))
+    application.add_handler(update_conv_handler)
     application.run_polling()
