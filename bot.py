@@ -4,7 +4,10 @@ from telegram.ext import (
     ConversationHandler, MessageHandler, filters
 )
 import mysql.connector
-from datetime import datetime
+from apscheduler.schedulers.background import BackgroundScheduler
+from datetime import datetime, timedelta
+
+import asyncio
 import json
 
 # Загрузка конфигурации из файла
@@ -211,6 +214,67 @@ async def cancel_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_text("Редактирование задачи отменено.")
     return ConversationHandler.END
 
+###########################################################################
+#ПЛАНИРОВЩИК
+###########################################################################
+
+# Планировщик для отправки напоминаний
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+# Функция для отправки напоминания
+async def send_reminder(user_id, task_description, deadline):
+    await context.bot.send_message(chat_id=user_id, text=f"Напоминание: {task_description}\nСрок: {deadline}")
+
+# Функция для проверки задач и отправки напоминаний
+def check_reminders():
+    db = connect_to_db()
+    cursor = db.cursor()
+
+    # Получение задач, которые требуют напоминания
+    current_time = datetime.now()
+    cursor.execute("SELECT user_id, description, deadline FROM tasks WHERE deadline > %s AND deadline < %s",
+                   (current_time, current_time + timedelta(minutes=10)))
+    tasks = cursor.fetchall()
+
+    # Отправка напоминаний
+    for task in tasks:
+        user_id, description, deadline = task
+        asyncio.run_coroutine_threadsafe(send_reminder(user_id, description, deadline), asyncio.get_event_loop())
+
+    cursor.close()
+    db.close()
+
+# Добавление задачи в планировщик
+scheduler.add_job(check_reminders, 'interval', minutes=1)
+
+# Функция для просмотра предстоящих напоминаний
+async def view_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.message.from_user.id
+
+    # Подключение к базе данных
+    db = connect_to_db()
+    cursor = db.cursor()
+
+    # Получение предстоящих задач пользователя
+    current_time = datetime.now()
+    cursor.execute("SELECT description, deadline FROM tasks WHERE user_id = %s AND deadline > %s",
+                   (user_id, current_time))
+    tasks = cursor.fetchall()
+
+    # Закрытие соединения
+    cursor.close()
+    db.close()
+
+    if not tasks:
+        await update.message.reply_text("У вас нет предстоящих напоминаний.")
+    else:
+        response = "Ваши предстоящие напоминания:\n"
+        for task in tasks:
+            description, deadline = task
+            response += f"Описание: {description}, Срок: {deadline}\n"
+        await update.message.reply_text(response)
+
 # Основная функция
 if __name__ == '__main__':
     application = ApplicationBuilder().token(config["telegram"]["token"]).build()
@@ -240,4 +304,5 @@ if __name__ == '__main__':
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler('viewtasks', view_tasks))
     application.add_handler(update_conv_handler)
+    application.add_handler(CommandHandler('reminders', view_reminders))
     application.run_polling()
