@@ -223,30 +223,39 @@ scheduler = BackgroundScheduler()
 scheduler.start()
 
 # Функция для отправки напоминания
-async def send_reminder(user_id, task_description, deadline):
-    await context.bot.send_message(chat_id=user_id, text=f"Напоминание: {task_description}\nСрок: {deadline}")
+async def send_reminder(application, user_id, task_description, deadline):
+    # Отправка сообщения пользователю с напоминанием
+    await application.bot.send_message(chat_id=user_id, text=f"Напоминание: {task_description}\nСрок: {deadline}")
 
 # Функция для проверки задач и отправки напоминаний
-def check_reminders():
+async def check_reminders(application):
     db = connect_to_db()
     cursor = db.cursor()
 
     # Получение задач, которые требуют напоминания
     current_time = datetime.now()
-    cursor.execute("SELECT user_id, description, deadline FROM tasks WHERE deadline > %s AND deadline < %s",
-                   (current_time, current_time + timedelta(minutes=10)))
+    cursor.execute(
+        "SELECT user_id, description, deadline FROM tasks WHERE deadline > %s AND deadline < %s",
+        (current_time, current_time + timedelta(minutes=10))  # Напоминание за 10 минут до срока
+    )
     tasks = cursor.fetchall()
 
     # Отправка напоминаний
     for task in tasks:
         user_id, description, deadline = task
-        asyncio.run_coroutine_threadsafe(send_reminder(user_id, description, deadline), asyncio.get_event_loop())
+        # Запуск асинхронной функции send_reminder
+        await send_reminder(application, user_id, description, deadline)
 
     cursor.close()
     db.close()
 
+# Функция для запуска проверки напоминаний в планировщике
+def run_check_reminders(application):
+    asyncio.run(check_reminders(application))
+
 # Добавление задачи в планировщик
-scheduler.add_job(check_reminders, 'interval', minutes=1)
+# Передаем экземпляр приложения в функцию run_check_reminders
+scheduler.add_job(lambda: run_check_reminders(application), 'interval', minutes=1)
 
 # Функция для просмотра предстоящих напоминаний
 async def view_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -301,8 +310,11 @@ if __name__ == '__main__':
         fallbacks=[CommandHandler('cancel', cancel_update)]
     )
 
+    # Добавляем обработчики в приложение
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler('viewtasks', view_tasks))
     application.add_handler(update_conv_handler)
-    application.add_handler(CommandHandler('reminders', view_reminders))
+    application.add_handler(CommandHandler('reminders', view_reminders))  # Добавляем обработчик для напоминаний
+
+    # Запуск приложения
     application.run_polling()
