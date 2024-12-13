@@ -5,6 +5,11 @@ from telegram.ext import (
 )
 import mysql.connector
 from datetime import datetime
+import json
+
+# Загрузка конфигурации из файла
+with open("config.json", "r") as config_file:
+    config = json.load(config_file)
 
 # Состояния для диалога
 DESCRIPTION, DEADLINE = range(2)  # Добавлено определение DESCRIPTION и DEADLINE
@@ -15,7 +20,7 @@ def connect_to_db():
     return mysql.connector.connect(
         host="localhost",
         user="root",
-        password="qqq",  # Замените на ваш пароль
+        password=config["db"]["password"],  # Замените на ваш пароль
         database="task_manager"
     )
 
@@ -208,7 +213,7 @@ async def cancel_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 # Основная функция
 if __name__ == '__main__':
-    application = ApplicationBuilder().token('xxx').build()
+    application = ApplicationBuilder().token(config["telegram"]["token"]).build()
 
     # Обработчик диалога для добавления задачи
     conv_handler = ConversationHandler(
