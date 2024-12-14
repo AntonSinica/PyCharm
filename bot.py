@@ -4,18 +4,17 @@ from telegram.ext import (
     ConversationHandler, MessageHandler, filters
 )
 import mysql.connector
-from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timedelta
-
-import asyncio
 import json
+from apscheduler.schedulers.background import BackgroundScheduler
+import atexit
 
 # Загрузка конфигурации из файла
 with open("config.json", "r") as config_file:
     config = json.load(config_file)
 
 # Состояния для диалога
-DESCRIPTION, DEADLINE = range(2)  # Добавлено определение DESCRIPTION и DEADLINE
+DESCRIPTION, DEADLINE = range(2)
 SELECT_TASK, CHOOSE_UPDATE_OPTION, UPDATE_DESCRIPTION, UPDATE_DEADLINE = range(2, 6)
 
 # Функция для подключения к базе данных
@@ -23,7 +22,7 @@ def connect_to_db():
     return mysql.connector.connect(
         host="localhost",
         user="root",
-        password=config["db"]["password"],  # Замените на ваш пароль
+        password=config["db"]["password"],
         database="task_manager"
     )
 
@@ -39,6 +38,67 @@ def register_user(user_id, username, first_name, last_name):
     db.commit()
     cursor.close()
     db.close()
+
+# Добавленные функции для напоминаний
+def send_reminders():
+    try:
+        db = connect_to_db()
+        cursor = db.cursor()
+        # Получить текущее время в UTC
+        now = datetime.utcnow()
+        # Вычислить время через 10 минут
+        reminder_time = now + timedelta(minutes=10)
+        # Получить задачи, где deadline между now и reminder_time и reminder_sent=False
+        query = """
+            SELECT task_id, user_id, description, deadline 
+            FROM tasks 
+            WHERE reminder_sent = FALSE 
+              AND deadline >= %s 
+              AND deadline <= %s
+        """
+        cursor.execute(query, (now, reminder_time))
+        tasks = cursor.fetchall()
+        for task in tasks:
+            task_id, user_id, description, deadline = task
+            # Отправить напоминание пользователю
+            context = ContextTypes.from_error_update(None)
+            app = ApplicationBuilder().token(config["telegram"]["token"]).build()
+            app.bot.send_message(chat_id=user_id, text=f"Напоминание: {description} скоро到期, 截止日期: {deadline}")
+            # Обновить флаг reminder_sent
+            update_query = "UPDATE tasks SET reminder_sent = TRUE WHERE task_id = %s"
+            cursor.execute(update_query, (task_id,))
+            db.commit()
+        cursor.close()
+        db.close()
+    except Exception as e:
+        print(f"Ошибка при отправке напоминаний: {e}")
+
+# Функция для команды /reminders
+async def show_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.message.from_user.id
+    db = connect_to_db()
+    cursor = db.cursor()
+    # Получить задачи пользователя, где deadline в будущем и reminder_sent=False
+    query = """
+        SELECT task_id, description, deadline 
+        FROM tasks 
+        WHERE user_id = %s 
+          AND deadline > %s 
+          AND reminder_sent = FALSE
+    """
+    now = datetime.utcnow()
+    cursor.execute(query, (user_id, now))
+    tasks = cursor.fetchall()
+    cursor.close()
+    db.close()
+    if not tasks:
+        await update.message.reply_text("У вас нет предстоящих напоминаний.")
+    else:
+        response = "Предстоящие напоминания:\n"
+        for task in tasks:
+            task_id, description, deadline = task
+            response += f"ID: {task_id}, Описание: {description}, Срок: {deadline}\n"
+        await update.message.reply_text(response)
 
 # Функция для добавления задачи
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -214,81 +274,19 @@ async def cancel_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_text("Редактирование задачи отменено.")
     return ConversationHandler.END
 
-###########################################################################
-#ПЛАНИРОВЩИК
-###########################################################################
-
-# Планировщик для отправки напоминаний
-scheduler = BackgroundScheduler()
-scheduler.start()
-
-# Функция для отправки напоминания
-async def send_reminder(application, user_id, task_description, deadline):
-    # Отправка сообщения пользователю с напоминанием
-    await application.bot.send_message(chat_id=user_id, text=f"Напоминание: {task_description}\nСрок: {deadline}")
-
-# Функция для проверки задач и отправки напоминаний
-async def check_reminders(application):
-    db = connect_to_db()
-    cursor = db.cursor()
-
-    # Получение задач, которые требуют напоминания
-    current_time = datetime.now()
-    cursor.execute(
-        "SELECT user_id, description, deadline FROM tasks WHERE deadline > %s AND deadline < %s",
-        (current_time, current_time + timedelta(minutes=10))  # Напоминание за 10 минут до срока
-    )
-    tasks = cursor.fetchall()
-
-    # Отправка напоминаний
-    for task in tasks:
-        user_id, description, deadline = task
-        # Запуск асинхронной функции send_reminder
-        await send_reminder(application, user_id, description, deadline)
-
-    cursor.close()
-    db.close()
-
-# Функция для запуска проверки напоминаний в планировщике
-def run_check_reminders(application):
-    asyncio.run(check_reminders(application))
-
-# Добавление задачи в планировщик
-# Передаем экземпляр приложения в функцию run_check_reminders
-scheduler.add_job(lambda: run_check_reminders(application), 'interval', minutes=1)
-
-# Функция для просмотра предстоящих напоминаний
-async def view_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.message.from_user.id
-
-    # Подключение к базе данных
-    db = connect_to_db()
-    cursor = db.cursor()
-
-    # Получение предстоящих задач пользователя
-    current_time = datetime.now()
-    cursor.execute("SELECT description, deadline FROM tasks WHERE user_id = %s AND deadline > %s",
-                   (user_id, current_time))
-    tasks = cursor.fetchall()
-
-    # Закрытие соединения
-    cursor.close()
-    db.close()
-
-    if not tasks:
-        await update.message.reply_text("У вас нет предстоящих напоминаний.")
-    else:
-        response = "Ваши предстоящие напоминания:\n"
-        for task in tasks:
-            description, deadline = task
-            response += f"Описание: {description}, Срок: {deadline}\n"
-        await update.message.reply_text(response)
-
 # Основная функция
 if __name__ == '__main__':
     application = ApplicationBuilder().token(config["telegram"]["token"]).build()
 
-    # Обработчик диалога для добавления задачи
+    # Добавить обработчик для /reminders
+    application.add_handler(CommandHandler('reminders', show_reminders))
+
+    # Инициализировать и запустить scheduler
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(send_reminders, 'interval', minutes=1)
+    scheduler.start()
+
+    # Добавить обработчики для диалогов
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('addtask', add_task)],
         states={
@@ -298,7 +296,6 @@ if __name__ == '__main__':
         fallbacks=[CommandHandler('cancel', cancel)]
     )
 
-    # Обработчик диалога для редактирования задачи
     update_conv_handler = ConversationHandler(
         entry_points=[CommandHandler('updatetask', update_task)],
         states={
@@ -310,11 +307,10 @@ if __name__ == '__main__':
         fallbacks=[CommandHandler('cancel', cancel_update)]
     )
 
-    # Добавляем обработчики в приложение
     application.add_handler(conv_handler)
-    application.add_handler(CommandHandler('viewtasks', view_tasks))
     application.add_handler(update_conv_handler)
-    application.add_handler(CommandHandler('reminders', view_reminders))  # Добавляем обработчик для напоминаний
 
-    # Запуск приложения
+    # Зарегистрировать функцию для завершения scheduler при выключении бота
+    atexit.register(lambda: scheduler.shutdown())
+
     application.run_polling()
